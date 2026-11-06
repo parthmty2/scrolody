@@ -90,7 +90,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: Build the release APK
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-37' 'build-tools;37.0.0' 'ndk;27.1.12297006' 'cmake;3.22.1'
+          # SDK Manager includes the minor version in the Android 17 package ID.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;27.1.12297006' 'cmake;3.22.1'
           echo "ANDROID_BUILD_TOOLS=$ANDROID_HOME/build-tools/37.0.0" >> "$GITHUB_ENV"
           cd android
           ./gradlew :app:assembleRelease --no-daemon
