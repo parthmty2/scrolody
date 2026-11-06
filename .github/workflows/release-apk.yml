@@ -1,0 +1,139 @@
+name: Publish Scrolody APK
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+    inputs:
+      increment:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      notes:
+        description: Release notes (optional)
+        type: string
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    concurrency:
+      group: scrolody-apk-release
+      queue: max
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      INCREMENT: ${{ inputs.increment || 'patch' }}
+      NOTES: ${{ inputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check Android signing secrets
+        env:
+          HAS_SIGNING_SECRETS: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
+        run: |
+          if [[ "$HAS_SIGNING_SECRETS" != true ]]; then
+            echo "::error::Set the four Android signing secrets listed in RELEASING.md."
+            exit 1
+          fi
+      - name: Validate release destination and bump version
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
+          HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
+        run: |
+          REPO=$(node -p "require('./app.json').expo.extra?.apkReleaseRepository || process.env.GITHUB_REPOSITORY")
+          if [[ ! "$REPO" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Set extra.apkReleaseRepository in app.json to the public owner/repo."
+            exit 1
+          fi
+          if [[ "${REPO,,}" != "${GITHUB_REPOSITORY,,}" && "$HAS_RELEASES_TOKEN" != true ]]; then
+            echo "::error::Set RELEASES_TOKEN to publish to a separate repository."
+            exit 1
+          fi
+          if [[ "$(gh repo view "$REPO" --json visibility --jq .visibility)" != PUBLIC ]]; then
+            echo "::error::The APK release repository must be public."
+            exit 1
+          fi
+          echo "RELEASE_REPO=$REPO" >> "$GITHUB_ENV"
+          gh api --paginate "repos/$REPO/releases" --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' > "$RUNNER_TEMP/scrolody-tags"
+          node scripts/apk-release.mjs prepare "$INCREMENT" "$RUNNER_TEMP/scrolody-tags" "$GITHUB_ENV" "$REPO"
+      - name: Set the Android build number
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
+        run: |
+          PRIOR=
+          if [[ -n "$PRIOR_TAG" ]]; then
+            mkdir -p "$RUNNER_TEMP/prior-release"
+            gh release download "$PRIOR_TAG" --repo "$RELEASE_REPO" --pattern update.json --dir "$RUNNER_TEMP/prior-release"
+            PRIOR="$RUNNER_TEMP/prior-release/update.json"
+          fi
+          node scripts/apk-release.mjs build-number "$PRIOR"
+          echo "PRIOR_MANIFEST=$PRIOR" >> "$GITHUB_ENV"
+      - name: Install and typecheck
+        run: |
+          npm ci
+          npm run typecheck
+      - name: Generate the native Android project
+        run: npx --no-install expo prebuild --platform android --no-install
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Build the release APK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-37' 'build-tools;37.0.0' 'ndk;27.1.12297006' 'cmake;3.22.1'
+          echo "ANDROID_BUILD_TOOLS=$ANDROID_HOME/build-tools/37.0.0" >> "$GITHUB_ENV"
+          cd android
+          ./gradlew :app:assembleRelease --no-daemon
+      - name: Sign APK and generate update manifest
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          shopt -s nullglob
+          APKS=(android/app/build/outputs/apk/release/*.apk)
+          if [[ "${#APKS[@]}" != 1 ]]; then
+            echo "::error::Expected one release APK from Gradle."
+            exit 1
+          fi
+          umask 077
+          KEYSTORE=$(mktemp "$RUNNER_TEMP/scrolody-key.XXXXXX")
+          ALIGNED="$RUNNER_TEMP/scrolody-aligned.apk"
+          trap 'rm -f -- "$KEYSTORE" "$ALIGNED"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+          "$ANDROID_BUILD_TOOLS/zipalign" -P 16 -f 4 "${APKS[0]}" "$ALIGNED"
+          "$ANDROID_BUILD_TOOLS/apksigner" sign --debuggable-apk-permitted false \
+            --ks "$KEYSTORE" --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+            --out "$RUNNER_TEMP/scrolody.apk" "$ALIGNED"
+          "$ANDROID_BUILD_TOOLS/zipalign" -c -P 16 4 "$RUNNER_TEMP/scrolody.apk"
+          SIGNING_INFO=$("$ANDROID_BUILD_TOOLS/apksigner" verify --print-certs "$RUNNER_TEMP/scrolody.apk")
+          SIGNER=$(awk '/^Signer #1 certificate SHA-256 digest:/ {print $NF}' <<< "$SIGNING_INFO")
+          node scripts/apk-release.mjs manifest "$RUNNER_TEMP/scrolody.apk" "$ANDROID_BUILD_TOOLS/aapt" "$RUNNER_TEMP/update.json" "$SIGNER" "$PRIOR_MANIFEST"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
+        run: |
+          NOTES_FILE="$RUNNER_TEMP/scrolody-notes.txt"
+          if [[ -n "$NOTES" ]]; then printf '%s\n' "$NOTES" > "$NOTES_FILE"; else git log -1 --format=%s > "$NOTES_FILE"; fi
+          TARGET=$(gh repo view "$RELEASE_REPO" --json defaultBranchRef --jq .defaultBranchRef.name)
+          if [[ "${RELEASE_REPO,,}" == "${GITHUB_REPOSITORY,,}" ]]; then TARGET="$GITHUB_SHA"; fi
+          if DRAFT=$(gh release view "$TAG" --repo "$RELEASE_REPO" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [[ "$DRAFT" != true ]]; then echo "::error::Release $TAG is already published."; exit 1; fi
+            gh release edit "$TAG" --repo "$RELEASE_REPO" --target "$TARGET" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$TAG" --repo "$RELEASE_REPO" --target "$TARGET" --title "Scrolody $VERSION" --notes-file "$NOTES_FILE" --draft
+          fi
+          gh release upload "$TAG" "$RUNNER_TEMP/scrolody.apk" "$RUNNER_TEMP/update.json" --repo "$RELEASE_REPO" --clobber
+          gh release edit "$TAG" --repo "$RELEASE_REPO" --draft=false --latest

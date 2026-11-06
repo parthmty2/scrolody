@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Scrolody",
+    "slug": "scrolody",
+    "scheme": "scrolody",
+    "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.scrolody.app"
+    },
+    "extra": {
+      "apkReleaseRepository": ""
+    },
+    "plugins": ["expo-router"],
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

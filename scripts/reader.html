@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; connect-src file:; worker-src blob:; style-src 'unsafe-inline'; img-src blob: data:; font-src blob: data:">
+    <style>__PDF_VIEWER_STYLES__</style>
+    <style>
+      body { background: #e9e8f2; margin: 0; }
+      #reader { position: absolute; inset: 0; overflow: auto; touch-action: pan-x pan-y; }
+      .pdfViewer.removePageBorders .page { margin-bottom: 2px; }
+      #define-word {
+        position: fixed; z-index: 10; min-height: 44px; padding: 0 16px;
+        border: 1px solid var(--lookup-outline, #cac4d0); border-radius: 999px;
+        background: var(--lookup-background, #e8def8); color: var(--lookup-foreground, #1d192b);
+        font: 600 14px system-ui, sans-serif; touch-action: manipulation;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="reader" role="region" aria-label="Book PDF">
+      <div class="pdfViewer"></div>
+    </div>
+    <button id="define-word" type="button" hidden>Define</button>
+    <script type="module">
+      const send = (message) => window.ReactNativeWebView.postMessage(JSON.stringify(message));
+      const container = document.querySelector('#reader');
+      const defineButton = document.querySelector('#define-word');
+      let selectedWord = null;
+      let selectionFrame = 0;
+
+      function updateSelection() {
+        selectionFrame = 0;
+        const selection = document.getSelection();
+        const anchor = selection?.anchorNode;
+        const element = anchor?.nodeType === Node.TEXT_NODE ? anchor.parentElement : anchor;
+        const word = selection && !selection.isCollapsed && element?.closest?.('.textLayer')
+          ? selection.toString().normalize('NFC').replace(/[\u00AD\u200B]/g, '').replace(/[’‘]/g, "'")
+            .replace(/^[^\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, '')
+          : '';
+        const rect = word && selection.rangeCount > 0 ? selection.getRangeAt(0).getBoundingClientRect() : null;
+        if (!rect || word.length > 64 || !/^\p{L}[\p{L}\p{M}]*(?:['-]\p{L}[\p{L}\p{M}]*)*$/u.test(word)
+          || rect.bottom <= 0 || rect.top >= container.clientHeight || rect.right <= 0 || rect.left >= container.clientWidth) {
+          selectedWord = null;
+          defineButton.hidden = true;
+          return;
+        }
+
+        selectedWord = word;
+        defineButton.hidden = false;
+        const width = defineButton.offsetWidth;
+        const height = defineButton.offsetHeight;
+        const x = Math.max(8, Math.min(container.clientWidth - width - 8, (rect.left + rect.right - width) / 2));
+        const below = rect.bottom + (rect.top < 56 ? 56 : 12);
+        const y = below + height <= container.clientHeight ? below : rect.top - height - 12;
+        defineButton.style.left = x + 'px';
+        defineButton.style.top = Math.max(8, y) + 'px';
+      }
+
+      function scheduleSelectionUpdate() {
+        if (!selectionFrame) selectionFrame = requestAnimationFrame(updateSelection);
+      }
+
+      document.addEventListener('selectionchange', scheduleSelectionUpdate);
+      container.addEventListener('scroll', scheduleSelectionUpdate, { passive: true });
+      window.addEventListener('resize', scheduleSelectionUpdate);
+      defineButton.addEventListener('pointerdown', (event) => event.preventDefault());
+      defineButton.addEventListener('click', () => {
+        if (!selectedWord) return;
+        const word = selectedWord;
+        selectedWord = null;
+        defineButton.hidden = true;
+        document.getSelection()?.removeAllRanges();
+        send({ define: word });
+      });
+
+      function moduleUrl(base64) {
+        const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+        return URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
+      }
+
+      function readBook(file) {
+        return new Promise((resolve, reject) => {
+          const request = new XMLHttpRequest();
+          request.open('GET', './' + encodeURIComponent(file));
+          request.responseType = 'arraybuffer';
+          request.onload = () => request.response?.byteLength
+            ? resolve(new Uint8Array(request.response))
+            : reject(new Error('The book file is empty.'));
+          request.onerror = () => reject(new Error('The book file could not be opened.'));
+          request.send();
+        });
+      }
+
+      try {
+        const input = new Promise((resolve) => { window.openBook = resolve; });
+        send({ ready: true });
+        const { file, page, pageMode } = await input;
+        const engineUrl = moduleUrl('__PDF_ENGINE__');
+        const workerUrl = moduleUrl('__PDF_WORKER__');
+        const pdfjs = await import(engineUrl);
+        const { EventBus, PDFViewer, ScrollMode } = await import(moduleUrl('__PDF_VIEWER__'));
+        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        const book = await pdfjs.getDocument({
+          data: await readBook(file),
+          isEvalSupported: false,
+          useWasm: false,
+        }).promise;
+        const eventBus = new EventBus();
+        const viewer = new PDFViewer({
+          container,
+          eventBus,
+          removePageBorders: true,
+          annotationMode: pdfjs.AnnotationMode.DISABLE,
+          enableAutoLinking: false,
+        });
+        let initialized = false;
+
+        function reportPage() {
+          send({ page: viewer.currentPageNumber, total: book.numPages });
+        }
+
+        function fitScale() {
+          const current = viewer.getPageView(viewer.currentPageNumber - 1);
+          return current ? container.clientWidth * current.scale / current.width : viewer.currentScale;
+        }
+
+        function zoomTo(target, origin, drawingDelay) {
+          const bounded = Math.min(10, target);
+          // PDF.js rounds numeric zoom to two decimals. Use its width preset at the limit.
+          if (bounded <= fitScale() + 0.005) {
+            viewer.currentScaleValue = 'page-width';
+          } else {
+            viewer.updateScale({ scaleFactor: bounded / viewer.currentScale, origin, drawingDelay });
+          }
+        }
+
+        window.showPage = (requested) => {
+          if (!initialized || !Number.isInteger(requested)) return;
+          const target = Math.max(1, Math.min(book.numPages, requested));
+          const fit = viewer.currentScaleValue === 'page-width';
+          viewer.currentPageNumber = target;
+          if (fit || viewer.currentScale < fitScale()) {
+            viewer.currentScaleValue = 'page-width';
+            viewer.currentPageNumber = target;
+          }
+        };
+        window.zoomPage = (steps) => {
+          if (initialized) zoomTo(viewer.currentScale * (1.1 ** steps));
+        };
+
+        eventBus.on('pagesinit', () => {
+          const start = Math.max(1, Math.min(book.numPages, Number.isInteger(page) ? page : 1));
+          if (pageMode === 'single') viewer.scrollMode = ScrollMode.PAGE;
+          viewer.currentPageNumber = start;
+          viewer.currentScaleValue = 'page-width';
+          viewer.currentPageNumber = start;
+          initialized = true;
+          reportPage();
+        });
+        eventBus.on('pagechanging', () => {
+          if (initialized) reportPage();
+        });
+        eventBus.on('pagerendered', ({ error, pageNumber }) => {
+          if (error && pageNumber === viewer.currentPageNumber) {
+            send({ error: 'This PDF page could not be displayed.' });
+          }
+        });
+
+        let pinchScale;
+        let pinchDistance;
+        new pdfjs.TouchManager({
+          container,
+          signal: new AbortController().signal,
+          isPinchingDisabled: () => !initialized,
+          onPinching(origin, previousDistance, distance) {
+            pinchScale ??= viewer.currentScale;
+            pinchDistance ??= previousDistance;
+            zoomTo(pinchScale * distance / pinchDistance, origin, 120);
+          },
+          onPinchEnd() {
+            pinchScale = pinchDistance = undefined;
+          },
+        });
+
+        new ResizeObserver(() => {
+          if (initialized && viewer.currentScale < fitScale()) viewer.currentScaleValue = 'page-width';
+        }).observe(container);
+
+        viewer.setDocument(book);
+        await viewer.pagesPromise;
+      } catch (error) {
+        send({
+          error: error?.name === 'PasswordException'
+            ? 'Choose a PDF that does not require a password.'
+            : 'This PDF could not be opened.',
+        });
+      }
+    </script>
+  </body>
+</html>
