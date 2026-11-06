@@ -33,10 +33,10 @@ jobs:
       INCREMENT: ${{ inputs.increment || 'patch' }}
       NOTES: ${{ inputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -120,7 +120,11 @@ jobs:
             --out "$RUNNER_TEMP/scrolody.apk" "$ALIGNED"
           "$ANDROID_BUILD_TOOLS/zipalign" -c -P 16 4 "$RUNNER_TEMP/scrolody.apk"
           SIGNING_INFO=$("$ANDROID_BUILD_TOOLS/apksigner" verify --print-certs "$RUNNER_TEMP/scrolody.apk")
-          SIGNER=$(awk '/^Signer #1 certificate SHA-256 digest:/ {print $NF}' <<< "$SIGNING_INFO")
+          SIGNER=$(awk '/^Signer( .+)? certificate SHA-256 digest:/ {print tolower($NF)}' <<< "$SIGNING_INFO" | sort -u)
+          if [[ ! "$SIGNER" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Expected exactly one distinct signer certificate SHA-256 fingerprint in apksigner output."
+            exit 1
+          fi
           node scripts/apk-release.mjs manifest "$RUNNER_TEMP/scrolody.apk" "$ANDROID_BUILD_TOOLS/aapt" "$RUNNER_TEMP/update.json" "$SIGNER" "$PRIOR_MANIFEST"
       - name: Publish GitHub release
         env:
