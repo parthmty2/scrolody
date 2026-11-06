@@ -1,32 +1,27 @@
-export const light = {
-  primary: '#6750A4', onPrimary: '#FFFFFF', primaryContainer: '#EADDFF', onPrimaryContainer: '#21005D',
-  secondaryContainer: '#E8DEF8', onSecondaryContainer: '#1D192B',
-  tertiaryContainer: '#FFD8E4', onTertiaryContainer: '#31111D',
-  surface: '#FEF7FF', surfaceDim: '#DED8E1', surfaceContainerLow: '#F7F2FA',
-  surfaceContainer: '#F3EDF7', surfaceContainerHigh: '#ECE6F0', surfaceContainerHighest: '#E6E0E9',
-  onSurface: '#1D1B20', onSurfaceVariant: '#49454F', outline: '#79747E', outlineVariant: '#CAC4D0',
-  error: '#BA1A1A', errorContainer: '#FFDAD6', onErrorContainer: '#410002', scrim: '#000000',
-};
+export type Palette = ReturnType<typeof accentPalette>;
 
-export type Palette = typeof light;
-
-export const dark: Palette = {
-  primary: '#D0BCFF', onPrimary: '#381E72', primaryContainer: '#4F378B', onPrimaryContainer: '#EADDFF',
-  secondaryContainer: '#4A4458', onSecondaryContainer: '#E8DEF8',
-  tertiaryContainer: '#633B48', onTertiaryContainer: '#FFD8E4',
-  surface: '#141218', surfaceDim: '#141218', surfaceContainerLow: '#1D1B20',
-  surfaceContainer: '#211F26', surfaceContainerHigh: '#2B2930', surfaceContainerHighest: '#36343B',
-  onSurface: '#E6E0E9', onSurfaceVariant: '#CAC4D0', outline: '#938F99', outlineVariant: '#49454F',
-  error: '#FFB4AB', errorContainer: '#93000A', onErrorContainer: '#FFDAD6', scrim: '#000000',
-};
-
-export const libraryAccents = {
-  light: {
-    artwork: { container: '#C0DCFF', content: '#133D74' },
-    featuredEdit: { container: '#ACC4EE', content: '#173863' },
-  },
-  dark: {
-    artwork: { container: '#315789', content: '#ECF4FF' },
-    featuredEdit: { container: '#1C3154', content: '#E2EEFF' },
-  },
-};
+export function accentPalette(isDark: boolean, hue: number) {
+  const tone = (saturation: number, lightness: number) => `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  return {
+    primary: tone(76, isDark ? 81 : 37),
+    onPrimary: isDark ? tone(70, 18) : '#FFFFFF',
+    primaryContainer: tone(58, isDark ? 31 : 91),
+    onPrimaryContainer: tone(72, isDark ? 94 : 16),
+    secondaryContainer: tone(35, isDark ? 27 : 89),
+    onSecondaryContainer: tone(44, isDark ? 92 : 17),
+    surface: tone(14, isDark ? 8 : 98),
+    surfaceDim: tone(12, isDark ? 8 : 86),
+    surfaceContainerLow: tone(15, isDark ? 12 : 96),
+    surfaceContainer: tone(16, isDark ? 15 : 93),
+    surfaceContainerHigh: tone(17, isDark ? 19 : 91),
+    surfaceContainerHighest: tone(18, isDark ? 23 : 88),
+    onSurface: tone(14, isDark ? 92 : 11),
+    onSurfaceVariant: tone(16, isDark ? 80 : 28),
+    outline: tone(10, isDark ? 60 : 45),
+    outlineVariant: tone(13, isDark ? 30 : 78),
+    error: isDark ? '#FFB4AB' : '#BA1A1A',
+    errorContainer: isDark ? '#93000A' : '#FFDAD6',
+    onErrorContainer: isDark ? '#FFDAD6' : '#410002',
+    scrim: '#000000',
+  };
+}

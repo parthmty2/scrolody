@@ -1,16 +1,17 @@
 import { useRouter } from 'expo-router';
 import { useState, type PropsWithChildren } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
-import { getSettings, saveSettings, skipIntervals, speeds, themeModes, type Settings, type ThemeMode } from '../../lib/settings';
+import { accentColors, getSettings, saveSettings, skipIntervals, speeds, themeModes, type Accent, type Settings, type ThemeMode } from '../../lib/settings';
 import { Button, Icon, MText, Screen } from '../../ui/material';
 import { PreferenceSwitch } from '../../ui/media-controls';
 import { shape, space, useMaterial, windowClass } from '../../ui/theme';
 
 const themeLabels = { system: 'System', light: 'Light', dark: 'Dark' } satisfies Record<ThemeMode, string>;
+const accents = Object.keys(accentColors) as Accent[];
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { colors, themeMode, changeThemeMode } = useMaterial();
+  const { colors, themeMode, changeThemeMode, accent, changeAccent } = useMaterial();
   const { width, fontScale } = useWindowDimensions();
   const [settings, setSettings] = useState(getSettings);
   const [error, setError] = useState(false);
@@ -35,6 +36,15 @@ export default function SettingsScreen() {
     }
   }
 
+  function selectAccent(next: Accent) {
+    try {
+      changeAccent(next);
+      setError(false);
+    } catch {
+      setError(true);
+    }
+  }
+
   return (
     <Screen edges={['top', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -43,6 +53,9 @@ export default function SettingsScreen() {
         <Section title="Appearance" icon="palette">
           <Preference title="Theme" description="System follows your device’s appearance.">
             <Choices label="Theme" values={themeModes} selected={themeMode} format={(mode) => themeLabels[mode]} onChange={selectTheme} connected />
+          </Preference>
+          <Preference title="Accent color" description="Choose the color used throughout Scrolody.">
+            <Choices label="Accent color" values={accents} selected={accent} format={(color) => accentColors[color].label} onChange={selectAccent} swatch={(color) => accentColors[color].seed} />
           </Preference>
         </Section>
         <View style={[styles.sections, width >= windowClass.expanded && fontScale < 1.5 && styles.columns]}>
@@ -83,8 +96,8 @@ function Section({ title, icon, children }: PropsWithChildren<{ title: string; i
   return (
     <View style={styles.section}>
       <View style={styles.sectionLabel}>
-        <View style={[styles.sectionIcon, { backgroundColor: colors.tertiaryContainer }]}>
-          <Icon name={icon} size={20} color={colors.onTertiaryContainer} />
+        <View style={[styles.sectionIcon, { backgroundColor: colors.primaryContainer }]}>
+          <Icon name={icon} size={20} color={colors.onPrimaryContainer} />
         </View>
         <MText accessibilityRole="header" variant="title">{title}</MText>
       </View>
@@ -109,8 +122,9 @@ function Preference({ title, description, trailing, children }: PropsWithChildre
   );
 }
 
-function Choices<T extends string | number>({ label, values, selected, format, onChange, connected }: {
+function Choices<T extends string | number>({ label, values, selected, format, onChange, connected, swatch }: {
   label: string; values: readonly T[]; selected: T; format: (value: T) => string; onChange: (value: T) => void; connected?: boolean;
+  swatch?: (value: T) => string;
 }) {
   const { colors } = useMaterial();
   const { fontScale } = useWindowDimensions();
@@ -136,6 +150,7 @@ function Choices<T extends string | number>({ label, values, selected, format, o
             ]}
           >
             {checked && <Icon name="check" size={16} color={colors.onSecondaryContainer} />}
+            {swatch && <View style={[styles.swatch, { backgroundColor: swatch(value) }]} />}
             <MText variant="label" tone={checked ? 'onSecondaryContainer' : 'onSurfaceVariant'} style={styles.choiceLabel}>{format(value)}</MText>
           </Pressable>
         );
@@ -162,6 +177,7 @@ const styles = StyleSheet.create({
   segmentStart: { borderTopStartRadius: shape.full, borderBottomStartRadius: shape.full },
   segmentEnd: { borderTopEndRadius: shape.full, borderBottomEndRadius: shape.full },
   choiceLabel: { flexShrink: 1, textAlign: 'center' },
+  swatch: { width: 14, height: 14, borderRadius: shape.full },
   pressed: { opacity: 0.72 },
   note: { padding: space.md, borderRadius: shape.largeIncreased, flexDirection: 'row', alignItems: 'center', gap: space.sm },
 });

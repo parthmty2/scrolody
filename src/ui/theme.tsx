@@ -1,8 +1,8 @@
 import { useFonts, type FontFamilyDefinition } from 'expo-font';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type PropsWithChildren } from 'react';
 import { AccessibilityInfo, StyleSheet, useColorScheme } from 'react-native';
-import { getThemeMode, saveThemeMode, type ThemeMode } from '../lib/settings';
-import { light, type Palette } from './palette';
+import { accentColors, getAccent, getThemeMode, saveAccent, saveThemeMode, type Accent, type ThemeMode } from '../lib/settings';
+import type { Palette } from './palette';
 import { usePlatformPalette } from './platform-palette';
 
 const fontFamilyName = 'Manrope';
@@ -22,19 +22,28 @@ const MaterialContext = createContext<{
   reduceMotion: boolean;
   themeMode: ThemeMode;
   changeThemeMode: (mode: ThemeMode) => void;
+  accent: Accent;
+  seedColor: string;
+  changeAccent: (accent: Accent) => void;
 } | null>(null);
 
 export function MaterialProvider({ children }: PropsWithChildren) {
   const systemScheme = useColorScheme();
   const [themeMode, setThemeMode] = useState(getThemeMode);
+  const [accent, setAccent] = useState(getAccent);
   const isDark = themeMode === 'system' ? systemScheme === 'dark' : themeMode === 'dark';
-  const colors = usePlatformPalette(isDark);
+  const seedColor = accentColors[accent].seed;
+  const colors = usePlatformPalette(isDark, accent);
   const [fontsLoaded] = useFonts(appFonts);
   const fontFamily = fontsLoaded ? fontFamilyName : undefined;
   const [reduceMotion, setReduceMotion] = useState(true);
   const changeThemeMode = useCallback((mode: ThemeMode) => {
     saveThemeMode(mode);
     setThemeMode(mode);
+  }, []);
+  const changeAccent = useCallback((next: Accent) => {
+    saveAccent(next);
+    setAccent(next);
   }, []);
   useEffect(() => {
     let active = true;
@@ -45,8 +54,8 @@ export function MaterialProvider({ children }: PropsWithChildren) {
     return () => { active = false; subscription.remove(); };
   }, []);
   const theme = useMemo(
-    () => ({ colors, fontFamily, isDark, reduceMotion, themeMode, changeThemeMode }),
-    [colors, fontFamily, isDark, reduceMotion, themeMode, changeThemeMode],
+    () => ({ colors, fontFamily, isDark, reduceMotion, themeMode, changeThemeMode, accent, seedColor, changeAccent }),
+    [colors, fontFamily, isDark, reduceMotion, themeMode, changeThemeMode, accent, seedColor, changeAccent],
   );
   return <MaterialContext.Provider value={theme}>{children}</MaterialContext.Provider>;
 }

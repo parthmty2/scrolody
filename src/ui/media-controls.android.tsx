@@ -8,9 +8,9 @@ import { useMaterial } from './theme';
 
 export function SeekSlider({ position, duration, disabled, onScrub, onSeek }: SeekProps) {
   const latest = useRef<number | null>(null);
-  const { isDark } = useMaterial();
+  const { isDark, seedColor } = useMaterial();
   return (
-    <Host colorScheme={isDark ? 'dark' : 'light'} matchContents={{ vertical: true }} style={styles.slider}>
+    <Host colorScheme={isDark ? 'dark' : 'light'} seedColor={seedColor} matchContents={{ vertical: true }} style={styles.slider}>
       <Slider
         max={duration || 1}
         value={Math.min(position, duration || 1)}
@@ -27,18 +27,18 @@ export function SeekSlider({ position, duration, disabled, onScrub, onSeek }: Se
 }
 
 export function PreferenceSwitch({ label, value, onChange }: PreferenceSwitchProps) {
-  const { isDark } = useMaterial();
+  const { isDark, seedColor } = useMaterial();
   return (
-    <Host colorScheme={isDark ? 'dark' : 'light'} matchContents>
+    <Host colorScheme={isDark ? 'dark' : 'light'} seedColor={seedColor} matchContents>
       <Switch value={value} onCheckedChange={onChange} modifiers={[semantics({ contentDescription: label })]} />
     </Host>
   );
 }
 
 export function LoadingMark() {
-  const { colors, isDark, reduceMotion } = useMaterial();
+  const { colors, isDark, reduceMotion, seedColor } = useMaterial();
   if (reduceMotion) return <Icon name="hourglass-empty" color={colors.primary} size={28} />;
-  return <Host colorScheme={isDark ? 'dark' : 'light'} matchContents><LoadingIndicator color={colors.primary} /></Host>;
+  return <Host colorScheme={isDark ? 'dark' : 'light'} seedColor={seedColor} matchContents><LoadingIndicator color={colors.primary} /></Host>;
 }
 
 const styles = StyleSheet.create({ slider: { flex: 1, minHeight: 48 } });

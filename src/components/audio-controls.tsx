@@ -1,12 +1,12 @@
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { File } from 'expo-file-system';
+import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { AppState, StyleSheet, View } from 'react-native';
+import { AppState, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { formatTime } from '../lib/format';
-import { projectDirectory, saveProgress, type Project } from '../lib/projects';
+import { projectTracks, saveProgress, type Project } from '../lib/projects';
 import type { Settings } from '../lib/settings';
-import { Button, IconButton, MText } from '../ui/material';
+import { Button, Dialog, IconButton, MText } from '../ui/material';
 import { SeekSlider } from '../ui/media-controls';
 import { shape, space, useMaterial } from '../ui/theme';
 
@@ -17,16 +17,51 @@ const skipIcons = {
 } as const;
 
 export function AudioControls({ project, settings }: { project: Project; settings: Settings }) {
+  const tracks = projectTracks(project);
+  const [selection, setSelection] = useState(() => ({
+    index: Math.max(0, Math.min(tracks.length - 1, project.audioTrack ?? 0)),
+    seconds: project.seconds,
+    autoplay: settings.autoplay,
+  }));
+  const [changeError, setChangeError] = useState('');
+  const track = tracks[selection.index];
+  if (!track) return <MText tone="error">No audiobook is linked to this project.</MText>;
+
+  function select(index: number, autoplay: boolean) {
+    if (index === selection.index || !tracks[index]) return;
+    try {
+      saveProgress(project.id, { audioTrack: index, seconds: 0 });
+      setChangeError('');
+      setSelection({ index, seconds: 0, autoplay });
+    } catch {
+      setChangeError('The chapter change could not be saved. Try again.');
+    }
+  }
+
+  return <TrackControls key={track.uri} id={project.id} tracks={tracks} selection={selection} settings={settings} changeError={changeError} onSelect={select} />;
+}
+
+function TrackControls({ id, tracks, selection, settings, changeError, onSelect }: {
+  id: string;
+  tracks: ReturnType<typeof projectTracks>;
+  selection: { index: number; seconds: number; autoplay: boolean };
+  settings: Settings;
+  changeError: string;
+  onSelect: (index: number, autoplay: boolean) => void;
+}) {
+  const router = useRouter();
   const { colors } = useMaterial();
-  const uri = new File(projectDirectory(project.id), project.audioFile).uri;
-  const player = useAudioPlayer(uri, { updateInterval: 250 });
+  const { index, seconds, autoplay } = selection;
+  const player = useAudioPlayer(tracks[index].uri, { updateInterval: 250 });
   const status = useAudioPlayerStatus(player);
   const [ready, setReady] = useState(false);
   const [scrub, setScrub] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [seekPending, setSeekPending] = useState(false);
-  const latest = useRef(project.seconds);
-  const saved = useRef(project.seconds);
+  const [showChapters, setShowChapters] = useState(false);
+  const latest = useRef(seconds);
+  const saved = useRef(seconds);
+  const advanced = useRef(false);
 
   useEffect(() => {
     if (!status.isLoaded || ready || error) return;
@@ -36,12 +71,12 @@ export function AudioControls({ project, settings }: { project: Project; setting
         await setAudioModeAsync({ playsInSilentMode: true });
         if (!active) return;
         const duration = player.duration;
-        if (project.seconds > 0) {
-          await player.seekTo(duration > 0 ? Math.min(project.seconds, duration) : project.seconds);
+        if (seconds > 0) {
+          await player.seekTo(duration > 0 ? Math.min(seconds, duration) : seconds);
         }
         if (active) {
           player.setPlaybackRate(settings.speed);
-          if (settings.autoplay && (!duration || project.seconds < duration)) player.play();
+          if (autoplay && (!duration || seconds < duration)) player.play();
           setReady(true);
         }
       } catch {
@@ -50,7 +85,7 @@ export function AudioControls({ project, settings }: { project: Project; setting
     }
     void start();
     return () => { active = false; };
-  }, [error, player, project.seconds, ready, settings.autoplay, settings.speed, status.isLoaded]);
+  }, [error, player, seconds, ready, autoplay, settings.speed, status.isLoaded]);
 
   useEffect(() => {
     if (!ready || !status.isLoaded || seekPending) return;
@@ -59,19 +94,25 @@ export function AudioControls({ project, settings }: { project: Project; setting
     latest.current = position;
     if (Math.abs(position - saved.current) >= 5 || (!status.playing && position !== saved.current)) {
       try {
-        saveProgress(project.id, { seconds: position });
+        saveProgress(id, { seconds: position }, index);
         saved.current = position;
       } catch {
         // The next checkpoint can retry.
       }
     }
-  }, [project.id, ready, seekPending, status.currentTime, status.didJustFinish, status.duration, status.isLoaded, status.playing]);
+  }, [id, index, ready, seekPending, status.currentTime, status.didJustFinish, status.duration, status.isLoaded, status.playing]);
+
+  useEffect(() => {
+    if (!ready || !status.didJustFinish || advanced.current || index + 1 >= tracks.length) return;
+    advanced.current = true;
+    onSelect(index + 1, true);
+  }, [index, onSelect, ready, status.didJustFinish, tracks.length]);
 
   useEffect(() => {
     function checkpoint() {
       if (latest.current === saved.current) return;
       try {
-        saveProgress(project.id, { seconds: latest.current });
+        saveProgress(id, { seconds: latest.current }, index);
         saved.current = latest.current;
       } catch {
         // Keep the last saved checkpoint if storage is unavailable.
@@ -84,11 +125,11 @@ export function AudioControls({ project, settings }: { project: Project; setting
       subscription.remove();
       checkpoint();
     };
-  }, [project.id]);
+  }, [id, index]);
 
   const duration = status.duration || 0;
-  const position = scrub ?? (ready ? status.currentTime : project.seconds);
-  const unavailable = !ready || seekPending || !!status.error;
+  const position = scrub ?? (ready ? status.currentTime : seconds);
+  const unavailable = !ready || seekPending || !!status.error || !!error;
   const skip = settings.skipSeconds;
   const [backIcon, forwardIcon] = skipIcons[skip];
 
@@ -116,8 +157,17 @@ export function AudioControls({ project, settings }: { project: Project; setting
 
   return (
     <SafeAreaView edges={['bottom']} style={[styles.player, { backgroundColor: colors.surfaceContainerHigh }]}>
+      {tracks.length > 1 && (
+        <View style={styles.chapters}>
+          <Button label={`Chapter ${index + 1} of ${tracks.length}`} icon="list" size="medium" variant="text" onPress={() => setShowChapters(true)} />
+        </View>
+      )}
+      {!!changeError && <MText tone="error" variant="bodySmall">{changeError}</MText>}
       {status.error || error ? (
-        <MText accessibilityLiveRegion="polite" variant="bodySmall" tone="error" style={styles.error}>{error || 'This audiobook could not be played.'}</MText>
+        <View style={styles.chapters}>
+          <MText accessibilityLiveRegion="polite" variant="bodySmall" tone="error" style={styles.error}>{error || 'This audiobook could not be played.'}</MText>
+          {Platform.OS === 'android' && <Button label="Reconnect audio" variant="tonal" size="medium" onPress={() => router.replace({ pathname: '/edit-project/[id]', params: { id, reconnect: '1' } })} />}
+        </View>
       ) : (
         <View style={styles.timeline}>
           <MText variant="labelSmall" tone="onSurfaceVariant" style={styles.time}>{formatTime(position)}</MText>
@@ -138,6 +188,18 @@ export function AudioControls({ project, settings }: { project: Project; setting
         </View>
         <IconButton tonal icon={forwardIcon} label={`Forward ${skip} seconds`} disabled={unavailable} onPress={() => void seek(status.currentTime + skip)} />
       </View>
+      {showChapters && (
+        <Dialog title="Chapters" onClose={() => setShowChapters(false)}>
+          <ScrollView style={styles.chapterList}>
+            {tracks.map((track, chapter) => (
+              <Button key={track.uri} label={`${chapter + 1}. ${track.name.replace(/\.[^.]+$/, '')}`} icon={chapter === index ? 'check' : undefined} variant={chapter === index ? 'tonal' : 'text'} size="medium" onPress={() => {
+                setShowChapters(false);
+                onSelect(chapter, status.playing);
+              }} />
+            ))}
+          </ScrollView>
+        </Dialog>
+      )}
     </SafeAreaView>
   );
 }
@@ -149,4 +211,6 @@ const styles = StyleSheet.create({
   timeline: { flexDirection: 'row', alignItems: 'center', width: '100%', maxWidth: 600, alignSelf: 'center', gap: space.sm },
   time: { fontVariant: ['tabular-nums'] },
   error: { paddingVertical: space.sm, textAlign: 'center' },
+  chapters: { alignItems: 'center' },
+  chapterList: { maxHeight: 320 },
 });

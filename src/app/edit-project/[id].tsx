@@ -5,7 +5,7 @@ import { MText, Screen, TopBar } from '../../ui/material';
 import { space } from '../../ui/theme';
 
 export default function EditProjectScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, reconnect } = useLocalSearchParams<{ id: string; reconnect?: string }>();
   const router = useRouter();
   let project: Project | null = null;
   try {
@@ -14,7 +14,7 @@ export default function EditProjectScreen() {
     // Storage errors and missing projects share the same unavailable state.
   }
 
-  return project ? <ProjectForm key={id} project={project} /> : (
+  return project ? <ProjectForm key={id} project={project} reconnect={reconnect === '1'} /> : (
     <Screen>
       <TopBar title="Project unavailable" onBack={() => router.dismissTo('/')} />
       <MText tone="onSurfaceVariant" style={{ padding: space.lg }}>This project could not be opened.</MText>

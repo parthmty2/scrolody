@@ -5,14 +5,12 @@ import { formatTime } from '../../lib/format';
 import { useApkUpdates } from '../../lib/apk-updates';
 import { listProjects, type Project } from '../../lib/projects';
 import { Button, Icon, IconButton, MText, Screen } from '../../ui/material';
-import { libraryAccents } from '../../ui/palette';
 import { shape, space, useMaterial, windowClass } from '../../ui/theme';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { release, ready } = useApkUpdates();
-  const { colors, isDark } = useMaterial();
-  const accents = libraryAccents[isDark ? 'dark' : 'light'];
+  const { colors } = useMaterial();
   const { width, fontScale } = useWindowDimensions();
   const columns = width >= windowClass.expanded && fontScale < 1.5 ? 2 : 1;
   const [projects, setProjects] = useState<Project[]>([]);
@@ -61,8 +59,8 @@ export default function HomeScreen() {
             {featured ? (
               <View style={[styles.hero, { backgroundColor: colors.primaryContainer }]}>
                 <View style={styles.featureHeading}>
-                  <BookArtwork colorPair={accents.artwork} />
-                  <IconButton icon="edit" label={`Edit ${featured.title}`} onPress={() => edit(featured)} colorPair={accents.featuredEdit} />
+                  <BookArtwork />
+                  <IconButton icon="edit" label={`Edit ${featured.title}`} onPress={() => edit(featured)} colorPair={{ container: colors.primary, content: colors.onPrimary }} />
                 </View>
                 <MText variant="label" tone="onPrimaryContainer">Continue reading</MText>
                 <MText variant="headline" tone="onPrimaryContainer" numberOfLines={3}>{featured.title}</MText>
@@ -72,10 +70,10 @@ export default function HomeScreen() {
                 </View>
               </View>
             ) : projects.length === 0 && !error ? (
-              <View style={[styles.hero, { backgroundColor: colors.tertiaryContainer }]}>
-                <BookArtwork colorPair={accents.artwork} />
-                <MText variant="headline" tone="onTertiaryContainer">Read and listen</MText>
-                <MText tone="onTertiaryContainer">Pair a book PDF with its audiobook to start your library.</MText>
+              <View style={[styles.hero, { backgroundColor: colors.primaryContainer }]}>
+                <BookArtwork />
+                <MText variant="headline" tone="onPrimaryContainer">Read and listen</MText>
+                <MText tone="onPrimaryContainer">Pair a book PDF with its audiobook to start your library.</MText>
                 <View style={styles.heroAction}><Button label="New project" icon="add" onPress={addProject} /></View>
               </View>
             ) : projects.length === 0 ? <Button label="New project" icon="add" onPress={addProject} /> : null}
@@ -107,11 +105,12 @@ export default function HomeScreen() {
   );
 }
 
-function BookArtwork({ colorPair }: { colorPair: { container: string; content: string } }) {
+function BookArtwork() {
+  const { colors } = useMaterial();
   return (
-    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.artwork, { backgroundColor: colorPair.container }]}>
-      <Icon name="menu-book" size={28} color={colorPair.content} />
-      <Icon name="graphic-eq" size={20} color={colorPair.content} />
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.artwork, { backgroundColor: colors.secondaryContainer }]}>
+      <Icon name="menu-book" size={28} color={colors.onSecondaryContainer} />
+      <Icon name="graphic-eq" size={20} color={colors.onSecondaryContainer} />
     </View>
   );
 }

@@ -2,19 +2,21 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { pickAudio, type AudioImport } from '../lib/audio-import';
 import { createProject, deleteProject, ProjectSaveError, updateProject, type Project } from '../lib/projects';
-import { Button, Dialog, Icon, MText, OutlinedField, Screen, TopBar } from '../ui/material';
+import { Button, Dialog, Icon, IconButton, MText, OutlinedField, Screen, TopBar } from '../ui/material';
 import { shape, space, useMaterial } from '../ui/theme';
 
 type Asset = DocumentPicker.DocumentPickerAsset;
 type FileKind = 'book' | 'audio';
 
-export function ProjectForm({ project }: { project?: Project }) {
+export function ProjectForm({ project, reconnect = false }: { project?: Project; reconnect?: boolean }) {
   const router = useRouter();
   const { colors } = useMaterial();
   const [title, setTitle] = useState(project?.title ?? '');
   const [book, setBook] = useState<Asset>();
-  const [audio, setAudio] = useState<Asset>();
+  const [audio, setAudio] = useState<AudioImport>();
+  const [audioOptions, setAudioOptions] = useState(false);
   const [picking, setPicking] = useState<FileKind>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -25,21 +27,20 @@ export function ProjectForm({ project }: { project?: Project }) {
     return () => { active.current = false; };
   }, []);
 
-  async function pick(kind: FileKind) {
+  async function pick(kind: FileKind, folder = false) {
+    setAudioOptions(false);
     setError('');
     setPicking(kind);
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: kind === 'book' ? 'application/pdf' : 'audio/*',
-        // Copy directly from Android's picker URI into the project folder.
-        copyToCacheDirectory: Platform.OS !== 'android',
-      });
-      if (!result.canceled) {
-        if (kind === 'book') setBook(result.assets[0]);
-        else setAudio(result.assets[0]);
+      if (kind === 'audio') {
+        const selected = await pickAudio(folder);
+        if (selected) setAudio(selected);
+      } else {
+        const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: Platform.OS !== 'android' });
+        if (!result.canceled) setBook(result.assets[0]);
       }
-    } catch {
-      setError('That file could not be opened. Try choosing it again.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'That file could not be opened. Try choosing it again.');
     } finally {
       setPicking(undefined);
     }
@@ -52,8 +53,11 @@ export function ProjectForm({ project }: { project?: Project }) {
     try {
       const name = title.trim() || project?.title || book?.name.replace(/\.pdf$/i, '').trim() || 'Untitled project';
       if (project) {
-        await updateProject(project.id, name, book, audio);
-        if (active.current) router.dismissTo('/');
+        await updateProject(project.id, name, book, audio, reconnect);
+        if (active.current) {
+          if (reconnect) router.replace({ pathname: '/reader/[id]', params: { id: project.id } });
+          else router.dismissTo('/');
+        }
       } else if (book && audio) {
         const created = await createProject(name, book, audio);
         if (active.current) router.replace({ pathname: '/reader/[id]', params: { id: created.id } });
@@ -78,17 +82,28 @@ export function ProjectForm({ project }: { project?: Project }) {
     }
   }
 
-  const changed = project ? (title.trim() !== '' && title.trim() !== project.title) || !!book || !!audio : !!book && !!audio;
-  const actionLabel = saving ? 'Saving…' : project ? 'Save changes' : 'Start project';
+  function moveTrack(from: number, to: number) {
+    if (!audio) return;
+    const tracks = audio.tracks.slice();
+    const [track] = tracks.splice(from, 1);
+    tracks.splice(to, 0, track);
+    setAudio({ ...audio, tracks });
+  }
+
+  const changed = reconnect ? !!audio : project ? (title.trim() !== '' && title.trim() !== project.title) || !!book || !!audio : !!book && !!audio;
+  const actionLabel = saving ? 'Saving…' : reconnect ? 'Reconnect audio' : project ? 'Save changes' : 'Start project';
 
   return (
     <Screen>
-      <TopBar title={project ? 'Edit project' : 'New project'} disabled={saving} onBack={() => router.dismissTo('/')} />
+      <TopBar title={reconnect ? 'Reconnect audio' : project ? 'Edit project' : 'New project'} disabled={saving} onBack={() => {
+        if (reconnect && project) router.replace({ pathname: '/reader/[id]', params: { id: project.id } });
+        else router.dismissTo('/');
+      }} />
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
-        <View style={[styles.intro, { backgroundColor: colors.tertiaryContainer }]}>
-          <Icon name={project ? 'edit' : 'library-add'} size={32} color={colors.onTertiaryContainer} />
-          <MText accessibilityRole="header" variant="headline" tone="onTertiaryContainer">{project ? 'Project details' : 'Pair your files'}</MText>
-          <MText tone="onTertiaryContainer">{project ? 'Rename the project or replace either file.' : 'Choose a book PDF and its matching audiobook.'}</MText>
+        <View style={[styles.intro, { backgroundColor: colors.primaryContainer }]}>
+          <Icon name={project ? 'edit' : 'library-add'} size={32} color={colors.onPrimaryContainer} />
+          <MText accessibilityRole="header" variant="headline" tone="onPrimaryContainer">{project ? 'Project details' : 'Pair your files'}</MText>
+          <MText tone="onPrimaryContainer">{project ? 'Rename the project or replace either file.' : 'Choose a book PDF and its matching audiobook.'}</MText>
         </View>
         <OutlinedField
           label={project ? 'Project name' : 'Project name (optional)'}
@@ -100,7 +115,22 @@ export function ProjectForm({ project }: { project?: Project }) {
         />
         <MText accessibilityRole="header" variant="titleMedium">Project files</MText>
         <FilePicker kind="book" filename={book?.name ?? (project && (project.bookName ?? 'Current PDF'))} pending={picking === 'book'} disabled={saving || !!picking} onPress={() => void pick('book')} />
-        <FilePicker kind="audio" filename={audio?.name ?? project?.audioName} pending={picking === 'audio'} disabled={saving || !!picking} onPress={() => void pick('audio')} />
+        <FilePicker kind="audio" filename={audio?.name ?? project?.audioName} pending={picking === 'audio'} disabled={saving || !!picking} onPress={() => Platform.OS === 'android' ? setAudioOptions(true) : void pick('audio')} />
+        {reconnect && <MText tone="onSurfaceVariant">Select the same files to restore access and keep your playback position.</MText>}
+        {!reconnect && audio && audio.tracks.length > 1 && (
+          <View style={styles.replacement}>
+            <MText accessibilityRole="header" variant="titleMedium">Chapter order</MText>
+            <MText tone="onSurfaceVariant" variant="bodySmall">{audio.checkOrder ? 'Some chapters need a closer look. Check the order and remove any extras you want to skip.' : 'Check the suggested order and move any chapter that’s out of place.'}</MText>
+            {audio.tracks.map((track, index) => (
+              <View key={track.uri} style={styles.chapter}>
+                <MText variant="bodySmall" style={styles.pickerText}>{index + 1}. {track.name.replace(/\.[^.]+$/, '')}</MText>
+                <IconButton icon="keyboard-arrow-up" label={`Move ${track.name} up`} disabled={saving || !!picking || index === 0} onPress={() => moveTrack(index, index - 1)} />
+                <IconButton icon="keyboard-arrow-down" label={`Move ${track.name} down`} disabled={saving || !!picking || index === audio.tracks.length - 1} onPress={() => moveTrack(index, index + 1)} />
+                <IconButton icon="close" label={`Remove ${track.name} from this audiobook`} disabled={saving || !!picking} onPress={() => setAudio({ ...audio, tracks: audio.tracks.filter((item) => item.uri !== track.uri) })} />
+              </View>
+            ))}
+          </View>
+        )}
         {project && book && (
           <ReplacementNote
             message="Replacing the PDF resets the saved page."
@@ -109,7 +139,7 @@ export function ProjectForm({ project }: { project?: Project }) {
             onPress={() => setBook(undefined)}
           />
         )}
-        {project && audio && (
+        {project && audio && !reconnect && (
           <ReplacementNote
             message="Replacing the audiobook resets its playback position."
             label="Keep current audiobook"
@@ -121,17 +151,23 @@ export function ProjectForm({ project }: { project?: Project }) {
         <View style={styles.action}>
           <Button label={actionLabel} icon={project ? 'check' : 'play-arrow'} disabled={!changed || saving || !!picking} onPress={() => void save()} />
         </View>
-        {project ? (
+        {project && !reconnect ? (
           <View style={styles.delete}><Button label="Delete project" icon="delete-outline" variant="danger" size="medium" disabled={saving || !!picking} onPress={() => setDeleting(true)} /></View>
-        ) : <MText variant="bodySmall" tone="onSurfaceVariant" style={styles.note}>Both files are stored on this device.</MText>}
+        ) : null}
       </ScrollView>
       {deleting && (
         <Dialog title="Delete project?" onClose={() => setDeleting(false)}>
-          <MText tone="onSurfaceVariant">This removes saved progress and the copies of both files stored in the app.</MText>
+          <MText tone="onSurfaceVariant">This removes saved progress and files stored inside Scrolody. Your original files stay where they are.</MText>
           <View style={styles.dialogActions}>
             <Button label="Cancel" variant="text" size="medium" onPress={() => setDeleting(false)} />
             <Button label="Delete" variant="danger" size="medium" onPress={confirmDelete} />
           </View>
+        </Dialog>
+      )}
+      {audioOptions && (
+        <Dialog title="Add audiobook" onClose={() => setAudioOptions(false)}>
+          <Button label="Choose audio files" icon="audio-file" variant="tonal" onPress={() => void pick('audio')} />
+          <Button label="Choose a chapter folder" icon="folder-open" variant="tonal" onPress={() => void pick('audio', true)} />
         </Dialog>
       )}
     </Screen>
@@ -187,10 +223,10 @@ const styles = StyleSheet.create({
     borderRadius: shape.medium,
   },
   pickerText: { flex: 1 },
+  chapter: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   replacement: { paddingHorizontal: space.sm, gap: space.xs },
   undo: { alignSelf: 'flex-start' },
   action: { marginTop: space.sm },
-  note: { textAlign: 'center' },
   delete: { alignSelf: 'center' },
   error: { padding: space.md, borderRadius: shape.medium },
   dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', flexWrap: 'wrap', gap: space.sm },

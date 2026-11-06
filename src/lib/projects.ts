@@ -2,6 +2,7 @@ import { randomUUID } from 'expo-crypto';
 import type { DocumentPickerAsset } from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 import Storage from 'expo-sqlite/kv-store';
+import { reconnectTracks, type AudioImport, type AudioTrack } from './audio-import';
 
 export type Project = {
   id: string;
@@ -9,7 +10,9 @@ export type Project = {
   bookName?: string;
   bookFile?: string;
   audioName: string;
-  audioFile: string;
+  audioFile?: string;
+  audioTracks?: AudioTrack[];
+  audioTrack?: number;
   page: number;
   seconds: number;
   updatedAt: number;
@@ -36,18 +39,23 @@ export function listProjects() {
     .sort((first, second) => second.updatedAt - first.updatedAt);
 }
 
-export function saveProgress(id: string, progress: Partial<Pick<Project, 'page' | 'seconds'>>) {
+export function saveProgress(id: string, progress: Partial<Pick<Project, 'page' | 'seconds' | 'audioTrack'>>, expectedTrack?: number) {
   const project = getProject(id);
-  if (project) {
+  if (project && (expectedTrack === undefined || (project.audioTrack ?? 0) === expectedTrack)) {
     Storage.setItemSync(prefix + id, JSON.stringify({ ...project, ...progress, updatedAt: Date.now() }));
   }
+}
+
+export function projectTracks(project: Project): AudioTrack[] {
+  if (project.audioTracks?.length) return project.audioTracks;
+  return project.audioFile ? [{ name: project.audioName, uri: new File(projectDirectory(project.id), project.audioFile).uri }] : [];
 }
 
 function audioExtension(name: string) {
   return name.match(/\.[a-z0-9]{1,8}$/i)?.[0] ?? '';
 }
 
-export async function createProject(title: string, book: DocumentPickerAsset, audio: DocumentPickerAsset) {
+export async function createProject(title: string, book: DocumentPickerAsset, audio: AudioImport) {
   let directory: Directory | undefined;
   let failure = 'The project folder could not be created.';
   try {
@@ -60,7 +68,7 @@ export async function createProject(title: string, book: DocumentPickerAsset, au
       title,
       bookName: book.name,
       audioName: audio.name,
-      audioFile: 'audiobook' + audioExtension(audio.name),
+      ...(audio.copy ? { audioFile: 'audiobook' + audioExtension(audio.name) } : { audioTracks: audio.tracks }),
       page: 1,
       seconds: 0,
       updatedAt: Date.now(),
@@ -69,7 +77,7 @@ export async function createProject(title: string, book: DocumentPickerAsset, au
     failure = 'The PDF could not be imported. Choose the file again and retry.';
     await new File(book.uri).copy(new File(directory, 'book.pdf'));
     failure = 'The audiobook could not be imported. Choose the file again and retry.';
-    await new File(audio.uri).copy(new File(directory, project.audioFile));
+    if (project.audioFile) await new File(audio.tracks[0].uri).copy(new File(directory, project.audioFile));
     failure = 'The project could not be added to your library.';
     Storage.setItemSync(prefix + id, JSON.stringify(project));
     return project;
@@ -93,10 +101,10 @@ function removeLocalFile(directory: Directory, name?: string) {
   }
 }
 
-export async function updateProject(id: string, title: string, book?: DocumentPickerAsset, audio?: DocumentPickerAsset) {
+export async function updateProject(id: string, title: string, book?: DocumentPickerAsset, audio?: AudioImport, reconnect = false) {
   const directory = projectDirectory(id);
   const bookFile = book && `book-${randomUUID()}.pdf`;
-  const audioFile = audio && `audiobook-${randomUUID()}${audioExtension(audio.name)}`;
+  const audioFile = audio?.copy ? `audiobook-${randomUUID()}${audioExtension(audio.name)}` : undefined;
   let previous: Project | null;
   let failure = 'The project could not be updated.';
 
@@ -107,17 +115,23 @@ export async function updateProject(id: string, title: string, book?: DocumentPi
     }
     if (audio && audioFile) {
       failure = 'The replacement audiobook could not be imported.';
-      await new File(audio.uri).copy(new File(directory, audioFile));
+      await new File(audio.tracks[0].uri).copy(new File(directory, audioFile));
     }
     failure = 'The project changes could not be saved.';
     previous = getProject(id);
     if (!previous) throw new Error('Project unavailable');
+    const tracks = audio && reconnect ? reconnectTracks(projectTracks(previous), audio.tracks) : audio?.tracks;
+    if (reconnect && (!tracks || audio?.copy)) {
+      failure = 'Choose the same audio files by filename to keep your playback position.';
+      throw new Error('Replacement files do not match');
+    }
 
     const updated: Project = {
       ...previous,
       title,
       ...(book && bookFile && { bookName: book.name, bookFile, page: 1 }),
-      ...(audio && audioFile && { audioName: audio.name, audioFile, seconds: 0 }),
+      ...(audio && { audioName: reconnect ? previous.audioName : audio.name, audioFile, audioTracks: audioFile ? undefined : tracks ?? undefined }),
+      ...(audio && !reconnect && { audioTrack: 0, seconds: 0 }),
       updatedAt: Date.now(),
     };
     Storage.setItemSync(prefix + id, JSON.stringify(updated));
