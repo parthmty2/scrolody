@@ -119,12 +119,10 @@ jobs:
             --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
             --out "$RUNNER_TEMP/scrolody.apk" "$ALIGNED"
           "$ANDROID_BUILD_TOOLS/zipalign" -c -P 16 4 "$RUNNER_TEMP/scrolody.apk"
-          SIGNING_INFO=$("$ANDROID_BUILD_TOOLS/apksigner" verify --print-certs "$RUNNER_TEMP/scrolody.apk")
-          SIGNER=$(awk '/^Signer( .+)? certificate SHA-256 digest:/ {print tolower($NF)}' <<< "$SIGNING_INFO" | sort -u)
-          if [[ ! "$SIGNER" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "::error::Expected exactly one distinct signer certificate SHA-256 fingerprint in apksigner output."
-            exit 1
-          fi
+          "$ANDROID_BUILD_TOOLS/apksigner" verify "$RUNNER_TEMP/scrolody.apk"
+          # Hash the DER certificate for the same keystore alias passed to apksigner.
+          SIGNER=$(keytool -exportcert -keystore "$KEYSTORE" -alias "$ANDROID_KEY_ALIAS" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD | sha256sum | cut -d ' ' -f 1)
           node scripts/apk-release.mjs manifest "$RUNNER_TEMP/scrolody.apk" "$ANDROID_BUILD_TOOLS/aapt" "$RUNNER_TEMP/update.json" "$SIGNER" "$PRIOR_MANIFEST"
       - name: Publish GitHub release
         env:
